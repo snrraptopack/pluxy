@@ -1,0 +1,38 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "pluxy",
+	"main": "worker/index.ts",
+	"compatibility_date": "2026-05-29",
+	"assets": {
+		"not_found_handling": "single-page-application"
+	},
+	"observability": {
+		"enabled": true
+	},
+	"upload_source_maps": true,
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"kv_namespaces": [
+		{
+			"binding": "USERS",
+			"id": "ec08456582904bc59f27592f400b5890"
+		},
+		{
+			"binding": "RESULTS",
+			"id": "c60c6816e0604d3d8e24f85f06708df2"
+		}
+	],
+	"vars": {
+		"SECRET": "pluxy_secret_key_must_be_32_chars_long"
+	},
+	"triggers": {
+		"crons": ["*/30 * * * *"]
+	},
+	"routes": [
+		{
+			"pattern": "pluxy.amihere.tech",
+			"custom_domain": true
+		}
+	],
+}
