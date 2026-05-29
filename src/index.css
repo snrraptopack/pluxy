@@ -585,3 +585,25 @@ table.sleek-table tr:last-child td {
 .layout-split > * {
   min-width: 0;
 }
+
+/* Make table rows visually interactive */
+table.sleek-table tbody tr {
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+table.sleek-table tbody tr:hover {
+  background-color: rgba(28, 26, 23, 0.02);
+}
+
+/* Modal slide-up animation */
+@keyframes modalSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import type { UmatResultsResponse } from './types'
+import type { UmatResultsResponse, CourseSheet } from './types'
 
 function App() {
   // App state
@@ -16,6 +16,7 @@ function App() {
   const [activeTab, setActiveTab] = useState<'overview' | 'courses' | 'insights'>('overview')
   const [selectedSemesterId, setSelectedSemesterId] = useState<number | null>(null)
   const [hoveredPoint, setHoveredPoint] = useState<{ index: number; x: number; y: number; cwa: number; average: number } | null>(null)
+  const [selectedCourse, setSelectedCourse] = useState<CourseSheet | null>(null)
 
   // Fetch remaining manual sync allowance
   const fetchUserStatus = async (user: string) => {
@@ -561,7 +562,10 @@ function App() {
                           {latestSemester.sheets.map((sheet) => {
                             const hasScores = sheet.classScore > 0 || sheet.examScore > 0
                             return (
-                              <tr key={sheet.studentResultSheetId}>
+                              <tr 
+                                key={sheet.studentResultSheetId}
+                                onClick={() => setSelectedCourse(sheet)}
+                              >
                                 <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{sheet.code}</td>
                                 <td style={{ fontWeight: '500' }}>{sheet.courseName}</td>
                                 <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{sheet.credit}</td>
@@ -673,6 +677,116 @@ function App() {
             </div>
           )}
 
+          {/* Detailed Course Sheet Modal overlay */}
+          {selectedCourse && (
+            <div 
+              style={{
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                width: '100vw',
+                height: '100vh',
+                backgroundColor: 'rgba(28, 26, 23, 0.4)',
+                backdropFilter: 'blur(4px)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 1000,
+                padding: '20px',
+                boxSizing: 'border-box'
+              }}
+              onClick={() => setSelectedCourse(null)}
+            >
+              <div 
+                className="dashboard-panel"
+                style={{
+                  width: '100%',
+                  maxWidth: '420px',
+                  margin: 0,
+                  padding: '30px',
+                  position: 'relative',
+                  boxShadow: '0 10px 30px rgba(28, 26, 23, 0.08)',
+                  animation: 'modalSlideUp 0.2s ease-out'
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <button 
+                  onClick={() => setSelectedCourse(null)}
+                  style={{
+                    position: 'absolute',
+                    top: '20px',
+                    right: '20px',
+                    background: 'none',
+                    border: 'none',
+                    fontSize: '1.5rem',
+                    cursor: 'pointer',
+                    color: 'var(--text-secondary)'
+                  }}
+                >
+                  &times;
+                </button>
+
+                <span className="section-label" style={{ marginBottom: '8px' }}>
+                  Course Record
+                </span>
+                <h3 style={{ margin: '0 0 4px 0', fontSize: '1.4rem', fontWeight: '700', lineHeight: 1.2 }}>
+                  {selectedCourse.courseName}
+                </h3>
+                <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)', fontSize: '0.9rem', display: 'block', marginBottom: '24px' }}>
+                  {selectedCourse.code}
+                </span>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', borderTop: '1px solid var(--border-clean)', paddingTop: '20px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Credits</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontWeight: '600' }}>{selectedCourse.credit}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Class Score</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontWeight: '600' }}>
+                      {selectedCourse.classScore > 0 ? `${selectedCourse.classScore.toFixed(1)}%` : '-'}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Exam Score</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontWeight: '600' }}>
+                      {selectedCourse.examScore > 0 ? `${selectedCourse.examScore.toFixed(1)}%` : '-'}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px dashed var(--border-clean)', paddingTop: '12px' }}>
+                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', fontWeight: '500' }}>Final Score</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontWeight: '700', fontSize: '1.1rem', color: 'var(--accent-rust)' }}>
+                      {selectedCourse.fullScore.toFixed(1)}%
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Grade</span>
+                    <span className={`grade-tag ${selectedCourse.letter.charAt(0)}`} style={{ fontSize: '1rem', padding: '6px 12px' }}>
+                      {selectedCourse.letter}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Status</span>
+                    <span style={{ 
+                      fontWeight: '600', 
+                      fontSize: '0.9rem', 
+                      color: selectedCourse.hasPassed ? 'var(--accent-teal)' : 'var(--accent-rust)' 
+                    }}>
+                      {selectedCourse.hasPassed ? 'PASSED' : 'TRAILED'}
+                    </span>
+                  </div>
+                </div>
+
+                <button 
+                  className="btn-solid" 
+                  onClick={() => setSelectedCourse(null)}
+                  style={{ width: '100%', marginTop: '30px', padding: '12px', borderRadius: '8px' }}
+                >
+                  Close details
+                </button>
+              </div>
+            </div>
+          )}
 
         </>
       )}
