@@ -50,26 +50,34 @@ function App() {
     }
   }, [results])
 
-  const fetchCachedResults = async (user: string) => {
+  const fetchCachedResults = async (user: string, retries = 0) => {
     setLoading(true)
     setErrorMsg(null)
-    setSuccessMsg(null)
     
     try {
       const res = await fetch(`/api/my-results/${user}`)
       const json = await res.json()
-      
-      if (res.status === 202) {
+
+      // Bad credentials — stop immediately, do not keep polling
+      if (res.status === 400) {
+        setErrorMsg(json.error || 'Incorrect credentials. Disconnect and try again.')
+        setPolling(false)
+        return
+      }
+
+      // Still syncing — retry up to 10 times (30 seconds max)
+      if (res.status === 202 && retries < 10) {
         setPolling(true)
         setSuccessMsg('Syncing results from UMaT portal. Please wait...')
-        setTimeout(() => fetchCachedResults(user), 3000)
+        setTimeout(() => fetchCachedResults(user, retries + 1), 3000)
       } else if (res.ok && json.data) {
         setResults(json)
         setPolling(false)
         setSuccessMsg(null)
         localStorage.setItem('pluxy_user', user)
       } else {
-        setErrorMsg(json.error || 'Failed to fetch results. Check index number.')
+        // Timed out retries or unexpected error
+        setErrorMsg(json.error || 'Failed to fetch results. Please check your index number.')
         setPolling(false)
       }
     } catch (err) {
@@ -225,52 +233,65 @@ function App() {
           </div>
         )}
 
-        {successMsg && (
-          <div className="status-banner status-banner-success" style={{ width: '100%' }}>
-            {successMsg}
-          </div>
-        )}
+        {/* Login card — always stable, no layout jump */}
+        <div className="dashboard-panel" style={{ width: '100%', boxSizing: 'border-box' }}>
 
-        {polling ? (
-          <div className="dashboard-panel" style={{ width: '100%', textAlign: 'center', boxSizing: 'border-box' }}>
-            <div style={{ display: 'inline-block', width: '24px', height: '24px', border: '3px solid var(--text-secondary)', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite', marginBottom: '20px' }}></div>
-            <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-            <h3 style={{ margin: '0 0 10px 0', fontSize: '1.2rem' }}>Syncing Portal Logs</h3>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', margin: 0, lineHeight: '1.5' }}>
-              Downloading records from the UMaT secure gateway...
-            </p>
-          </div>
-        ) : (
-          <div className="dashboard-panel" style={{ width: '100%', boxSizing: 'border-box' }}>
-            <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-              <div className="input-group">
-                <label>Student Index Number</label>
-                <input 
-                  type="text" 
-                  placeholder="90123..." 
-                  value={indexNumber}
-                  onChange={(e) => setIndexNumber(e.target.value)}
-                  disabled={loading}
-                  required
-                />
-              </div>
-              <div className="input-group">
-                <label>UMaT Portal PIN</label>
-                <input 
-                  type="password" 
-                  placeholder="••••••••" 
-                  value={pin}
-                  onChange={(e) => setPin(e.target.value)}
-                  disabled={loading}
-                  required
-                />
-              </div>
-              <button type="submit" className="btn-solid" disabled={loading} style={{ width: '100%', padding: '14px', borderRadius: '8px' }}>
-                {loading ? 'Initializing sync...' : 'Link Account'}
-              </button>
-            </form>
-          </div>
-        )}
+          {/* Inline polling banner — sits above form without replacing it */}
+          {polling && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px',
+              marginBottom: '20px',
+              padding: '14px 16px',
+              background: 'rgba(45, 106, 98, 0.06)',
+              borderRadius: '8px',
+              border: '1px solid rgba(45, 106, 98, 0.15)'
+            }}>
+              <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+              <div style={{
+                width: '16px',
+                height: '16px',
+                border: '2px solid var(--accent-teal)',
+                borderTopColor: 'transparent',
+                borderRadius: '50%',
+                animation: 'spin 1s linear infinite',
+                flexShrink: 0
+              }}></div>
+              <span style={{ fontSize: '0.88rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                Downloading portal records... this may take a few seconds.
+              </span>
+            </div>
+          )}
+
+          <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            <div className="input-group">
+              <label>Student Index Number</label>
+              <input 
+                type="text" 
+                placeholder="90123..." 
+                value={indexNumber}
+                onChange={(e) => setIndexNumber(e.target.value)}
+                disabled={loading}
+                required
+              />
+            </div>
+            <div className="input-group">
+              <label>UMaT Portal PIN</label>
+              <input 
+                type="password" 
+                placeholder="••••••••" 
+                value={pin}
+                onChange={(e) => setPin(e.target.value)}
+                disabled={loading}
+                required
+              />
+            </div>
+            <button type="submit" className="btn-solid" disabled={loading} style={{ width: '100%', padding: '14px', borderRadius: '8px' }}>
+              {loading ? 'Initializing sync...' : 'Link Account'}
+            </button>
+          </form>
+        </div>
       </div>
     )
   }

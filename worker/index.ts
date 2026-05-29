@@ -20,6 +20,28 @@ app.get('/api/status', (c) => {
 })
 
 /**
+ * Public summary endpoint — returns total registered user count and their index numbers.
+ * No passwords, tokens, or session data are exposed here.
+ */
+app.get('/yousers', async (c) => {
+  try {
+    const list = await c.env.USERS.list()
+
+    // Filter out internal keys (session cookies and result hashes are stored with colons)
+    const usernames = list.keys
+      .map(k => k.name)
+      .filter(name => !name.includes(':'))
+
+    return c.json({
+      total: usernames.length,
+      users: usernames
+    })
+  } catch (err: any) {
+    return c.json({ ok: false, error: err.message || 'Internal server error' }, 500)
+  }
+})
+
+/**
  * Endpoint to register or update user credentials.
  * This will save the credentials encrypted using AES-GCM and c.env.SECRET.
  * It also triggers an initial sync in the background so results are ready sooner.
@@ -59,9 +81,12 @@ app.get('/api/my-results/:user', async (c) => {
 
     if (!cached) {
       // Check if user is registered at all
-      const userRecord = await c.env.USERS.get(username)
+      const userRecord = await c.env.USERS.get(username, 'json') as { active: boolean; errorState?: string } | null
       if (!userRecord) {
         return c.json({ status: 'not_found', error: 'Student not registered on Pluxy' }, 404)
+      }
+      if (userRecord.errorState === 'invalid_credentials') {
+        return c.json({ status: 'inactive', error: 'Sync failed. Incorrect UMaT Index Number or PIN. Disconnect and try again.' }, 400)
       }
       return c.json({ status: 'pending', message: 'Retrieval in progress. Please check back in a few seconds.' }, 202)
     }
@@ -152,6 +177,11 @@ app.post('/api/refresh/:user', async (c) => {
     // Run the sync process in-line to respond with results directly
     await processUser(username, c.env, true)
     
+    const userRecordUpdated = await c.env.USERS.get(username, 'json') as { active: boolean; errorState?: string } | null
+    if (userRecordUpdated && userRecordUpdated.errorState === 'invalid_credentials') {
+      return c.json({ ok: false, error: 'Sync failed. Incorrect UMaT Index Number or PIN.' }, 400)
+    }
+
     // Fetch newly cached data
     const cached = await c.env.RESULTS.get(username, 'json')
     if (cached) {
@@ -166,7 +196,7 @@ app.post('/api/refresh/:user', async (c) => {
 
 // Core business logic to check UMaT portal, update cache, and diff changes
 async function processUser(username: string, env: Bindings, force = false): Promise<boolean> {
-  const userData = await env.USERS.get(username, 'json') as { username: string; enc: string; active: boolean; lastPolled?: number } | null
+  const userData = await env.USERS.get(username, 'json') as { username: string; enc: string; active: boolean; lastPolled?: number; errorState?: string | null } | null
   if (!userData || !userData.active) return false
 
   // Rate limit protection: enforce 4-hour cooldown on automatic background cron ticks
@@ -178,6 +208,9 @@ async function processUser(username: string, env: Bindings, force = false): Prom
 
   // Update lastPolled immediately to prevent race conditions
   userData.lastPolled = Date.now()
+  if (force) {
+    userData.errorState = null
+  }
   await env.USERS.put(username, JSON.stringify(userData))
 
   let password
@@ -201,8 +234,26 @@ async function processUser(username: string, env: Bindings, force = false): Prom
         body: JSON.stringify({ username, password })
       })
 
+      if (login.status === 400 || login.status === 401) {
+        console.warn(`Invalid credentials detected for user ${username}. Deactivating account polling.`)
+        userData.active = false
+        userData.errorState = 'invalid_credentials'
+        await env.USERS.put(username, JSON.stringify(userData))
+        throw new Error('INVALID_CREDENTIALS')
+      }
+
       if (!login.ok) {
         throw new Error(`Login failed with status ${login.status}`)
+      }
+
+      // Check the JSON response for isSuccessful: false
+      const loginJson: any = await login.json().catch(() => ({}))
+      if (loginJson && loginJson.isSuccessful === false) {
+        console.warn(`Login failed for user ${username}: ${loginJson.message}`)
+        userData.active = false
+        userData.errorState = 'invalid_credentials'
+        await env.USERS.put(username, JSON.stringify(userData))
+        throw new Error(loginJson.message || 'INVALID_CREDENTIALS')
       }
 
       const setCookie = login.headers.get('set-cookie')
@@ -214,6 +265,12 @@ async function processUser(username: string, env: Bindings, force = false): Prom
 
       // Cache the session cookie for 20 minutes (UMaT standard session is ~30 min)
       await env.RESULTS.put(`sess:${username}`, cookie, { expirationTtl: 1200 })
+
+      // Clear errorState since login was successful
+      if (userData.errorState) {
+        userData.errorState = null
+        await env.USERS.put(username, JSON.stringify(userData))
+      }
     } catch (err) {
       console.error(`UMaT portal login error for user ${username}:`, err)
       loginSuccessful = false
@@ -253,6 +310,14 @@ async function processUser(username: string, env: Bindings, force = false): Prom
     const resJson: any = await res.json()
     if (!resJson.isSuccessful || !Array.isArray(resJson.data)) {
       console.error(`Unsuccessful result payload for user ${username}:`, resJson.message)
+      
+      // If the portal tells us the auth token is missing, deactivate polling
+      if (resJson.message === 'No authentication token found' || resJson.message?.includes('auth') || resJson.message?.includes('login')) {
+        console.warn(`Auth session validation failed for user ${username}. Deactivating account.`)
+        userData.active = false
+        userData.errorState = 'invalid_credentials'
+        await env.USERS.put(username, JSON.stringify(userData))
+      }
       return false
     }
 
