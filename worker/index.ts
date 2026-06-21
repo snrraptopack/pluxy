@@ -41,6 +41,8 @@ app.get('/yousers', async (c) => {
   }
 })
 
+app.get('/yoursers', (c) => c.redirect('/yousers'))
+
 /**
  * Endpoint to register or update user credentials.
  * This will save the credentials encrypted using AES-GCM and c.env.SECRET.
@@ -85,8 +87,11 @@ app.get('/api/my-results/:user', async (c) => {
       if (!userRecord) {
         return c.json({ status: 'not_found', error: 'Student not registered on Pluxy' }, 404)
       }
-      if (userRecord.errorState === 'invalid_credentials') {
-        return c.json({ status: 'inactive', error: 'Sync failed. Incorrect UMaT Index Number or PIN. Disconnect and try again.' }, 400)
+      if (userRecord.errorState) {
+        const errorMsg = userRecord.errorState === 'invalid_credentials'
+          ? 'Sync failed. Incorrect UMaT Index Number or PIN. Disconnect and try again.'
+          : `Sync failed. Portal block or server error occurred: ${userRecord.errorState}`
+        return c.json({ status: 'inactive', error: errorMsg }, 400)
       }
       return c.json({ status: 'pending', message: 'Retrieval in progress. Please check back in a few seconds.' }, 202)
     }
@@ -194,6 +199,98 @@ app.post('/api/refresh/:user', async (c) => {
   }
 })
 
+/**
+ * Upload a profile picture to the UMaT portal.
+ */
+app.post('/api/upload-profile/:user', async (c) => {
+  try {
+    const username = c.req.param('user')
+    const userData = await c.env.USERS.get(username, 'json') as { username: string; enc: string; active: boolean } | null
+
+    if (!userData) {
+      return c.json({ ok: false, error: 'User credentials not found. Please sign up first.' }, 404)
+    }
+
+    // 1. Session Retrieval (Check cache first)
+    let cookie = await c.env.RESULTS.get(`sess:${username}`)
+    if (!cookie) {
+      let password
+      try {
+        password = await decrypt(userData.enc, c.env.SECRET)
+      } catch (err) {
+        return c.json({ ok: false, error: 'Failed to decrypt credentials.' }, 500)
+      }
+
+      console.log('Logging in to UMaT portal for profile upload:', username)
+      const login = await fetch('https://student.umat.edu.gh/api/auth/login', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        },
+        body: JSON.stringify({ username, password })
+      })
+
+      if (!login.ok) {
+        return c.json({ ok: false, error: `Login to UMaT portal failed with status ${login.status}` }, 401)
+      }
+
+      const loginJson: any = await login.json().catch(() => ({}))
+      if (loginJson && loginJson.isSuccessful === false) {
+        return c.json({ ok: false, error: loginJson.message || 'Invalid credentials' }, 401)
+      }
+
+      const setCookie = login.headers.get('set-cookie')
+      cookie = setCookie?.split(';')[0] || ''
+      
+      if (!cookie) {
+        return c.json({ ok: false, error: 'Failed to retrieve session cookie from portal.' }, 500)
+      }
+
+      // Cache the session cookie for 20 minutes
+      await c.env.RESULTS.put(`sess:${username}`, cookie, { expirationTtl: 1200 })
+    }
+
+    // 2. Parse uploaded file
+    const body = await c.req.parseBody()
+    const imageFile = body['file']
+    if (!imageFile || !(imageFile instanceof File)) {
+      return c.json({ ok: false, error: 'No valid file uploaded. Please upload an image.' }, 400)
+    }
+
+    // 3. Forward the image to UMaT portal
+    console.log(`Forwarding profile picture upload for ${username} to UMaT portal...`)
+    const formData = new FormData()
+    formData.append('file', imageFile)
+
+    const uploadResponse = await fetch('https://student.umat.edu.gh/api/profile/picture', {
+      method: 'POST',
+      headers: {
+        'Cookie': cookie,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      },
+      body: formData
+    })
+
+    const uploadRawText = await uploadResponse.text()
+    let uploadResult: any
+    try {
+      uploadResult = JSON.parse(uploadRawText)
+    } catch (e) {
+      return c.json({ ok: false, error: 'UMaT portal returned HTML or an invalid response instead of JSON.' }, 502)
+    }
+
+    if (uploadResult?.isSuccessful) {
+      return c.json({ ok: true, message: uploadResult.message || 'Profile picture updated successfully.' })
+    } else {
+      return c.json({ ok: false, error: uploadResult?.message || 'Server rejected the upload payload.' }, 400)
+    }
+
+  } catch (error: any) {
+    return c.json({ ok: false, error: error.message || 'Internal server error' }, 500)
+  }
+})
+
 // Core business logic to check UMaT portal, update cache, and diff changes
 async function processUser(username: string, env: Bindings, force = false): Promise<boolean> {
   const userData = await env.USERS.get(username, 'json') as { username: string; enc: string; active: boolean; lastPolled?: number; errorState?: string | null } | null
@@ -230,7 +327,10 @@ async function processUser(username: string, env: Bindings, force = false): Prom
       console.log('Logging in to UMaT portal for', username)
       const login = await fetch('https://student.umat.edu.gh/api/auth/login', {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'user-agent': 'Mozilla/5.0' },
+        headers: {
+          'content-type': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        },
         body: JSON.stringify({ username, password })
       })
 
@@ -271,9 +371,13 @@ async function processUser(username: string, env: Bindings, force = false): Prom
         userData.errorState = null
         await env.USERS.put(username, JSON.stringify(userData))
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(`UMaT portal login error for user ${username}:`, err)
       loginSuccessful = false
+      
+      userData.active = false
+      userData.errorState = err.message || 'portal_error'
+      await env.USERS.put(username, JSON.stringify(userData))
     }
   }
 
@@ -282,7 +386,10 @@ async function processUser(username: string, env: Bindings, force = false): Prom
   // 2. Fetch academic results
   try {
     let res = await fetch('https://student.umat.edu.gh/api/result', {
-      headers: { cookie, 'user-agent': 'Mozilla/5.0' }
+      headers: {
+        'Cookie': cookie,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      }
     })
 
     // Handle expired cookie (401) by clearing cache and retrying once
@@ -292,7 +399,10 @@ async function processUser(username: string, env: Bindings, force = false): Prom
       
       const login = await fetch('https://student.umat.edu.gh/api/auth/login', {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'user-agent': 'Mozilla/5.0' },
+        headers: {
+          'content-type': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        },
         body: JSON.stringify({ username, password })
       })
 
@@ -302,7 +412,10 @@ async function processUser(username: string, env: Bindings, force = false): Prom
       if (cookie) {
         await env.RESULTS.put(`sess:${username}`, cookie, { expirationTtl: 1200 })
         res = await fetch('https://student.umat.edu.gh/api/result', {
-          headers: { cookie, 'user-agent': 'Mozilla/5.0' }
+          headers: {
+            'Cookie': cookie,
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+          }
         })
       }
     }
@@ -311,13 +424,10 @@ async function processUser(username: string, env: Bindings, force = false): Prom
     if (!resJson.isSuccessful || !Array.isArray(resJson.data)) {
       console.error(`Unsuccessful result payload for user ${username}:`, resJson.message)
       
-      // If the portal tells us the auth token is missing, deactivate polling
-      if (resJson.message === 'No authentication token found' || resJson.message?.includes('auth') || resJson.message?.includes('login')) {
-        console.warn(`Auth session validation failed for user ${username}. Deactivating account.`)
-        userData.active = false
-        userData.errorState = 'invalid_credentials'
-        await env.USERS.put(username, JSON.stringify(userData))
-      }
+      // Store the exact error message and stop background task to avoid infinite pending loop
+      userData.active = false
+      userData.errorState = resJson.message || 'portal_error'
+      await env.USERS.put(username, JSON.stringify(userData))
       return false
     }
 
@@ -327,12 +437,15 @@ async function processUser(username: string, env: Bindings, force = false): Prom
     if (!newHash) return false
     const oldHash = await env.RESULTS.get(`${username}:hash`)
 
+    const now = Date.now()
+
     if (newHash !== oldHash) {
-      // Save full response with updated timestamp
+      // Save full response with updated and lastChecked timestamps
       await env.RESULTS.put(
         username,
         JSON.stringify({
-          updated: Date.now(),
+          updated: now,
+          lastChecked: now,
           studentName: resJson.studentName,
           data: resJson.data
         })
@@ -351,6 +464,13 @@ async function processUser(username: string, env: Bindings, force = false): Prom
       return true
     } else {
       console.log('No changes in results for user', username)
+      
+      // Update lastChecked timestamp in existing cache so user knows we checked
+      const cached = await env.RESULTS.get(username, 'json') as any
+      if (cached) {
+        cached.lastChecked = now
+        await env.RESULTS.put(username, JSON.stringify(cached))
+      }
       return true
     }
   } catch (err) {

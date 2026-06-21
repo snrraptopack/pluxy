@@ -35,4 +35,5 @@ export interface UmatResultsResponse {
   data: SemesterResult[];
   studentName: string;
   updated?: number;
+  lastChecked?: number;
 }

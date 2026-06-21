@@ -59,6 +59,60 @@ body {
   margin-bottom: 40px;
 }
 
+.app-header-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.avatar-upload {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background-color: var(--border-clean);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-clean);
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 1.1rem;
+  font-weight: 600;
+  transition: all 0.2s ease;
+  position: relative;
+  cursor: pointer;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.avatar-upload:hover {
+  border-color: var(--text-primary);
+  color: var(--text-primary);
+}
+
+.avatar-upload:hover .avatar-overlay {
+  opacity: 1;
+}
+
+.avatar-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(28, 26, 23, 0.6);
+  color: #FFFFFF;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  font-size: 0.7rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
 .app-title {
   font-size: 1.5rem;
   font-weight: 600;

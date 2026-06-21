@@ -12,6 +12,7 @@ function App() {
   const [polling, setPolling] = useState<boolean>(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [successMsg, setSuccessMsg] = useState<string | null>(null)
+  const [uploadingImage, setUploadingImage] = useState<boolean>(false)
   
   const [activeTab, setActiveTab] = useState<'overview' | 'courses' | 'insights'>('overview')
   const [selectedSemesterId, setSelectedSemesterId] = useState<number | null>(null)
@@ -158,6 +159,47 @@ function App() {
     setSuccessMsg(null)
   }
 
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const fileList = e.target.files
+    if (!fileList || fileList.length === 0) return
+
+    const file = fileList[0]
+
+    // Simple 2MB client-side limit
+    if (file.size > 2 * 1024 * 1024) {
+      setErrorMsg('Image size must be less than 2MB.')
+      return
+    }
+
+    setUploadingImage(true)
+    setErrorMsg(null)
+    setSuccessMsg('Uploading profile picture...')
+
+    const formData = new FormData()
+    formData.append('file', file)
+
+    try {
+      const res = await fetch(`/api/upload-profile/${indexNumber}`, {
+        method: 'POST',
+        body: formData
+      })
+      const json = await res.json()
+
+      if (res.ok && json.ok) {
+        setSuccessMsg(json.message || 'Profile picture updated successfully.')
+        setTimeout(() => setSuccessMsg(null), 5000)
+      } else {
+        setErrorMsg(json.error || 'Failed to upload profile picture.')
+      }
+    } catch (err) {
+      setErrorMsg('Network error while uploading profile picture.')
+    } finally {
+      setUploadingImage(false)
+      // Reset input value so it can be re-triggered for the same file if needed
+      e.target.value = ''
+    }
+  }
+
   // Dashboard Stats Calculations
   const semestersList = results?.data || []
   const semestersCount = semestersList.length
@@ -301,9 +343,31 @@ function App() {
     <div>
       {/* Top Header matching Portfolio Navigation */}
       <div className="app-header">
-        <h2 className="app-title">{results.studentName}</h2>
+        <div className="app-header-left">
+          <label htmlFor="profile-upload" className="avatar-upload" title="Upload Profile Picture">
+            {uploadingImage ? (
+              <span style={{ fontSize: '0.8rem' }}>...</span>
+            ) : (
+              results.studentName ? results.studentName.split(' ').map((n: string) => n[0]).join('').substring(0, 2).toUpperCase() : 'U'
+            )}
+            <div className="avatar-overlay">Upload</div>
+          </label>
+          <input 
+            type="file" 
+            id="profile-upload" 
+            accept="image/*" 
+            style={{ display: 'none' }} 
+            onChange={handleImageUpload}
+            disabled={uploadingImage}
+          />
+          <div>
+            <h2 className="app-title">{results.studentName}</h2>
+            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+              Index: {indexNumber}
+            </div>
+          </div>
+        </div>
         <div className="header-links">
-          <span>Index: {indexNumber}</span>
           <button 
             onClick={handleRefresh} 
             disabled={loading || syncsRemaining === 0} 
@@ -365,7 +429,7 @@ function App() {
         <div className="kpi-cell">
           <span className="kpi-label">Last Checked</span>
           <span className="kpi-value" style={{ fontSize: '1.5rem', alignSelf: 'flex-start', margin: '6px 0' }}>
-            {results.updated ? new Date(results.updated).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'JUST NOW'}
+            {results.lastChecked || results.updated ? new Date(results.lastChecked ?? results.updated ?? 0).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'JUST NOW'}
           </span>
         </div>
       </div>
